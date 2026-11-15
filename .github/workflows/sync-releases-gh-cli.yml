@@ -6,7 +6,7 @@ on:
   workflow_dispatch: # 允许手动触发
 
 permissions:
-  contents: write # 必须授予写权限，才能创建 Release 和上传附件
+  contents: write # 必须授予写权限
 
 jobs:
   sync:
@@ -14,14 +14,15 @@ jobs:
     steps:
       - name: Sync Releases
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }} # 使用 GitHub 自动提供的 Token
-          SOURCE_REPO: "NimaNzrii/comfyui-photoshop" # 【修改点】替换为上游仓库
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SOURCE_REPO: "NimaNzrii/comfyui-photoshop"
           TARGET_REPO: ${{ github.repository }}
         run: |
           # 获取上游所有 Release 的标签名
           RELEASES=$(gh release list --repo "$SOURCE_REPO" --limit 100 --json tagName --jq '.[].tagName')
           
           for TAG in $RELEASES; do
+            echo "========================================="
             echo "Processing release: $TAG"
             
             # 检查你的 Fork 中是否已存在该 Release
@@ -30,24 +31,30 @@ jobs:
               continue
             fi
             
-            # 如果不存在，则创建 Release (直接基于标签，不额外上传附件)
+            # 如果不存在，则创建 Release
             echo "Creating release $TAG in $TARGET_REPO..."
             gh release create "$TAG" --repo "$TARGET_REPO" --notes "Synced from $SOURCE_REPO"
             
-            # 创建临时目录并下载上游该 Release 的所有附件
-            TMP_DIR="/tmp/release-$TAG"
-            mkdir -p "$TMP_DIR"
-            echo "Downloading assets for $TAG from $SOURCE_REPO..."
-            gh release download "$TAG" --repo "$SOURCE_REPO" --dir "$TMP_DIR" --pattern "*"
+            # 检查上游这个 Release 是否包含附件 (Assets)
+            ASSET_COUNT=$(gh release view "$TAG" --repo "$SOURCE_REPO" --json assets --jq '.assets | length')
             
-            # 如果下载到了附件，则上传到你的 Fork 仓库
-            if [ -d "$TMP_DIR" ] && [ "$(ls -A "$TMP_DIR")" ]; then
-              echo "Uploading assets for $TAG to $TARGET_REPO..."
-              gh release upload "$TAG" "$TMP_DIR"/* --repo "$TARGET_REPO"
+            if [ "$ASSET_COUNT" -gt 0 ]; then
+              # 创建临时目录并下载附件
+              TMP_DIR="/tmp/release-$TAG"
+              mkdir -p "$TMP_DIR"
+              echo "Downloading assets for $TAG from $SOURCE_REPO..."
+              # 注意：这里去掉了 --pattern "*"，直接下载所有附件
+              gh release download "$TAG" --repo "$SOURCE_REPO" --dir "$TMP_DIR" || echo "Download failed or no assets."
+              
+              # 如果下载到了附件，则上传到你的 Fork 仓库
+              if [ -d "$TMP_DIR" ] && [ "$(ls -A "$TMP_DIR")" ]; then
+                echo "Uploading assets for $TAG to $TARGET_REPO..."
+                gh release upload "$TAG" "$TMP_DIR"/* --repo "$TARGET_REPO"
+              fi
+              
+              # 清理临时目录
+              rm -rf "$TMP_DIR"
             else
-              echo "No assets found for release $TAG."
+              echo "No custom assets found for release $TAG, skipping download."
             fi
-            
-            # 清理临时目录
-            rm -rf "$TMP_DIR"
           done
