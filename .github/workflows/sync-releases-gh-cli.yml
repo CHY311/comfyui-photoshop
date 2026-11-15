@@ -1,0 +1,53 @@
+name: Sync Releases with GitHub CLI
+
+on:
+  schedule:
+    - cron: '0 2 * * *' # 每天 UTC 2:00 (北京时间 10:00) 自动运行
+  workflow_dispatch: # 允许手动触发
+
+permissions:
+  contents: write # 必须授予写权限，才能创建 Release 和上传附件
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Sync Releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }} # 使用 GitHub 自动提供的 Token
+          SOURCE_REPO: "NimaNzrii/comfyui-photoshop" # 【修改点】替换为上游仓库
+          TARGET_REPO: ${{ github.repository }}
+        run: |
+          # 获取上游所有 Release 的标签名
+          RELEASES=$(gh release list --repo "$SOURCE_REPO" --limit 100 --json tagName --jq '.[].tagName')
+          
+          for TAG in $RELEASES; do
+            echo "Processing release: $TAG"
+            
+            # 检查你的 Fork 中是否已存在该 Release
+            if gh release view "$TAG" --repo "$TARGET_REPO" &>/dev/null; then
+              echo "Release $TAG already exists in $TARGET_REPO, skipping."
+              continue
+            fi
+            
+            # 如果不存在，则创建 Release (直接基于标签，不额外上传附件)
+            echo "Creating release $TAG in $TARGET_REPO..."
+            gh release create "$TAG" --repo "$TARGET_REPO" --notes "Synced from $SOURCE_REPO"
+            
+            # 创建临时目录并下载上游该 Release 的所有附件
+            TMP_DIR="/tmp/release-$TAG"
+            mkdir -p "$TMP_DIR"
+            echo "Downloading assets for $TAG from $SOURCE_REPO..."
+            gh release download "$TAG" --repo "$SOURCE_REPO" --dir "$TMP_DIR" --pattern "*"
+            
+            # 如果下载到了附件，则上传到你的 Fork 仓库
+            if [ -d "$TMP_DIR" ] && [ "$(ls -A "$TMP_DIR")" ]; then
+              echo "Uploading assets for $TAG to $TARGET_REPO..."
+              gh release upload "$TAG" "$TMP_DIR"/* --repo "$TARGET_REPO"
+            else
+              echo "No assets found for release $TAG."
+            fi
+            
+            # 清理临时目录
+            rm -rf "$TMP_DIR"
+          done
